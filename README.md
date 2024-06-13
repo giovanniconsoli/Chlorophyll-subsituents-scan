@@ -10,4 +10,5 @@ Inspired by the Cone scan methods, from Gisriel et al (https://www.ncbi.nlm.nih.
 ## Code
 The code is divided in two portions. the first one, named "Chl_analyzer.py" takes as input a PDB model (.pdb, .cif) and a CryoEM map (.map, .mrc) and output a pickle file containing the a "cone" for each chlorophyll substituent. "the other one", takes as input the said .pickle, and allows to analyze the data more freely, it's currently set up to analyze Chlf. 
 
-![Conescanguide_2](https://github.com/giovanniconsoli/Chlorophyll-subsituents-scan/assets/166529682/962898fd-7a77-405b-8fc1-eebcfd4bf267)
+
+![Conescan_guide_paper_v3](https://github.com/giovanniconsoli/Chlorophyll-subsituents-scan/assets/166529682/c2e8781d-f6fd-4ff7-98ae-69fc08800027)
