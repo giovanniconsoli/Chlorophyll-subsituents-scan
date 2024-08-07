@@ -17,7 +17,7 @@ takes as input a PDB model (.pdb, .cif) and a CryoEM map (.map, .mrc), a referen
 Moreover the script outputs a series of PDB files (2 for each chlorophyll substituent in the map) that can be used to visualize the raw ESP and the Z-scores of the ESP direcly in chimera. 
 To do this, open the map and the cone.pdb file of interest, select it and color it by B-factor. 
 
-## Chl_analyzer
+## Chl_visualizer
 
 takes as input the .pickle files mentioned above, and provides some intuitive (I hope) functions to asses the performance on the map/model couple and to visualize cones of interest more freely.
 
