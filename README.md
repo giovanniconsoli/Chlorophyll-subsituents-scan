@@ -1,5 +1,7 @@
 # Chlorophyll ESP polar plot
 
+the following analysis has been used in http://biorxiv.org/lookup/doi/10.1101/2024.08.06.606606
+
 ## Purpose
 The assignment of different chlorophyll substituents in CryoEM maps is proven to be a difficult task, high resolution maps are needed to be able to distunguish the Coulumb potential of single atoms. The problem is exacerbated by the increased negative potential around formyl groups, present at the C7 position in Chl b, at the C2 position in Chl f and at the C3 position (instead of a vinyl) in Chl d. 
 
