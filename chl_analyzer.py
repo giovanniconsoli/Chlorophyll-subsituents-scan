@@ -1,5 +1,5 @@
 import pickle
-from argparse import ArgumentParser
+import argparse
 from collections import namedtuple
 from pathlib import Path
 
@@ -23,44 +23,57 @@ SUBSTITUENTS = ["C2", "C3", "C7", "C8", "C12"]
 Cone = namedtuple("Cone", ["atoms", "length", "angle", "group"])
 
 
-def pdb_string(
-    atom: str,
-    serial: int,
-    name: str,
-    alt_loc: str,
-    res_name: str,
-    chain: str,
-    resi: int,
-    ins: str,
-    x: float,
-    y: float,
-    z: float,
-    occ: float,
-    temp: float,
-) -> str:
-    # https://cupnet.net/pdb-format/
-    return (
-        f"{atom:6s}{serial:5d} {name:^4s}{alt_loc:1s}{res_name:3s} {chain:1s}{resi:4d}{ins:1s}   "
-        f"{x:8.3f}{y:8.3f}{z:8.3f}{occ:6.2f}{temp:6.2f}\n"
-    )
+def main():
+    args = parse_arguments()
+
+    structure_file = args.structure
+    eden_map = gemmi.read_ccp4_map(args.map, setup=True)
+    loc_res_map = gemmi.read_ccp4_map(args.locres, setup=True) if args.locres else None
+    out_dir = Path(args.outdir)
+    ref_substituent = args.reference
+
+    structure = gemmi.read_structure(structure_file)
+    validate_ref_substituent(ref_substituent)
+
+    chlorophylls = analyze_chlorophylls(structure, eden_map, loc_res_map)
+    results_df = get_df(chlorophylls)
+    stats_df = get_statistics_df(results_df)
+    zscores_df = get_zscores_df(results_df, stats_df, ref_substituent)
+
+    create_output_directories(out_dir)
+
+    base_filename = Path(structure_file).stem
+    save_dataframes(out_dir, base_filename, results_df, stats_df, zscores_df)
+    save_cone_pdb(chlorophylls, zscores_df, out_dir)
 
 
-def mock_pdb(n: int, resi: int, x: float, y: float, z: float, temp: float) -> str:
-    return pdb_string(
-        "ATOM",  # atom
-        n,
-        "CA",  # name
-        "",  # alt_loc
-        "UNK",  # res_name
-        "A",  # chain
-        resi,
-        "",  # ins
-        x,
-        y,
-        z,
-        1.00,  # occ
-        temp,
+def parse_arguments() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "-s", "--structure", type=str, required=True, help="Path to the structure file"
     )
+    parser.add_argument(
+        "-m",
+        "--map",
+        type=str,
+        required=True,
+        help="Path to the electron density map file",
+    )
+    parser.add_argument(
+        "-l", "--locres", type=str, help="Path to the local resolution map file"
+    )
+    parser.add_argument(
+        "-o", "--outdir", type=str, required=True, help="Output directory for results"
+    )
+    parser.add_argument(
+        "-r", "--reference", type=str, required=True, help="Reference substituent"
+    )
+    return parser.parse_args()
+
+
+def validate_ref_substituent(ref: str) -> None:
+    if ref not in SUBSTITUENTS:
+        raise ValueError(f"Reference substituent {ref} not in substituents list.")
 
 
 def analyze_chlorophylls(
@@ -146,37 +159,6 @@ def get_cones(distance: float) -> list[Cone]:
     return cones
 
 
-def calculate_scan_amps(
-    three_atoms: list[gemmi.Atom],
-    vec0: gemmi.Vec3,
-    emap: gemmi.Ccp4Map,
-) -> tuple[np.ndarray, np.ndarray]:
-    _, av2, av3 = [gemmi.Vec3(*[a for a in ap.pos]) for ap in three_atoms]
-    avector = normalise(av3 - av2)
-    scan_amps = []
-    map_positions = []
-    theta: int
-    for n, theta in enumerate(SCAN_ANGLES):
-        p = increment_torsion(vec0, avector, av3, theta)
-        map_pos = gemmi.Position(*p)
-        eden = emap.grid.tricubic_interpolation(map_pos)
-        scan_amps.append(eden)
-        map_positions.append([pos for pos in map_pos])
-
-    return np.array(scan_amps), np.array(map_positions)
-
-
-def perpendicular_vector(vector: gemmi.Vec3) -> gemmi.Vec3:
-    # get a perpendicular vector, swap y,x, change a sign and zero z, dot product = 0
-    # later we measure the dihedral and adjust position to dihedral of 0
-    x, y, z = vector
-    return gemmi.Vec3(y, -x, 0)
-
-
-def normalise(vector: gemmi.Vec3) -> gemmi.Vec3:
-    return vector / vector.length()
-
-
 def new_position(
     bond_angle: int, bond_length: float, three_atoms: list[gemmi.Atom]
 ) -> gemmi.Vec3:
@@ -197,6 +179,17 @@ def new_position(
     return increment_torsion(new_vec, avector, av3, -dihedral)
 
 
+def normalise(vector: gemmi.Vec3) -> gemmi.Vec3:
+    return vector / vector.length()
+
+
+def perpendicular_vector(vector: gemmi.Vec3) -> gemmi.Vec3:
+    # get a perpendicular vector, swap y,x, change a sign and zero z, dot product = 0
+    # later we measure the dihedral and adjust position to dihedral of 0
+    x, y, z = vector
+    return gemmi.Vec3(y, -x, 0)
+
+
 def increment_torsion(
     v: gemmi.Vec3, k: gemmi.Vec3, apoint: gemmi.Vec3, theta: float
 ) -> gemmi.Vec3:
@@ -213,51 +206,24 @@ def increment_torsion(
     return vrot
 
 
-def main():
-    parser = ArgumentParser()
-    parser.add_argument("-s", "--structure", type=str)
-    parser.add_argument("-m", "--map", type=str)
-    parser.add_argument("-l", "--locres", type=str)
-    parser.add_argument("-d", "--dir", type=str)
-    parser.add_argument("-o", "--outdir", type=str)
-    parser.add_argument("-r", "--reference", type=str)
-    args = parser.parse_args()
+def calculate_scan_amps(
+    three_atoms: list[gemmi.Atom],
+    vec0: gemmi.Vec3,
+    emap: gemmi.Ccp4Map,
+) -> tuple[np.ndarray, np.ndarray]:
+    _, av2, av3 = [gemmi.Vec3(*[a for a in ap.pos]) for ap in three_atoms]
+    avector = normalise(av3 - av2)
+    scan_amps = []
+    map_positions = []
+    theta: int
+    for n, theta in enumerate(SCAN_ANGLES):
+        p = increment_torsion(vec0, avector, av3, theta)
+        map_pos = gemmi.Position(*p)
+        eden = emap.grid.tricubic_interpolation(map_pos)
+        scan_amps.append(eden)
+        map_positions.append([pos for pos in map_pos])
 
-    structure_file, map_file, loc_res_file, out_dir, ref_substituent = (
-        args.structure,
-        args.map,
-        args.locres,
-        args.outdir,
-        args.reference,
-    )
-    if ref_substituent not in SUBSTITUENTS:
-        raise ValueError(
-            f"Reference substituent {ref_substituent} not in substituents list."
-        )
-
-    structure = gemmi.read_structure(structure_file)
-    eden_map = gemmi.read_ccp4_map(map_file, setup=True)
-
-    loc_res_map = (
-        gemmi.read_ccp4_map(loc_res_file, setup=True) if loc_res_file else None
-    )
-
-    chlorophylls = analyze_chlorophylls(structure, eden_map, loc_res_map)
-    results_df = get_df(chlorophylls)
-
-    structure_data_filename = Path(Path(structure_file).stem + "_conedata").with_suffix(
-        ".pickle"
-    )
-    with open(structure_data_filename, "wb") as out:
-        pickle.dump(results_df, out, protocol=pickle.HIGHEST_PROTOCOL)
-
-    stats_df = get_statistics_df(results_df)
-    zscores_df = get_zscores_df(results_df, stats_df, ref_substituent)
-
-    out_dir = Path(out_dir)
-    if not out_dir.exists():
-        out_dir.mkdir(parents=True)
-    save_cone_pdb(chlorophylls, zscores_df, out_dir)
+    return np.array(scan_amps), np.array(map_positions)
 
 
 def get_df(chlorophylls: list[dict]) -> pd.DataFrame:
@@ -285,8 +251,8 @@ def get_statistics_df(df: pd.DataFrame) -> pd.DataFrame:
 
     for column in SUBSTITUENTS:
         data_column = df[column]
-        std_dev = np.sqrt((data_column**2).mean(axis=0))
         average = data_column.mean(axis=0)
+        std_dev = np.sqrt((data_column**2).mean(axis=0))
         stats_df[column] = [
             average,
             std_dev,
@@ -310,6 +276,33 @@ def get_zscores_df(
             zscores_df.loc[row_idx, substituent] = z
 
     return zscores_df
+
+
+def create_output_directories(out_dir: Path) -> None:
+    for sub_dir in ["pdb_intensity", "pdb_zscores"]:
+        path = out_dir / sub_dir
+        path.mkdir(parents=True, exist_ok=True)
+
+
+def save_dataframes(
+    out_dir: Path,
+    base_filename: str,
+    results_df: pd.DataFrame,
+    stats_df: pd.DataFrame,
+    zscores_df: pd.DataFrame,
+) -> None:
+    structure_data_filename = out_dir / (base_filename + "_conedata.pickle")
+    stats_filename = out_dir / (base_filename + "_stats.pickle")
+    zscores_filename = out_dir / (base_filename + "_zscores.pickle")
+
+    save_pickle(results_df, structure_data_filename)
+    save_pickle(stats_df, stats_filename)
+    save_pickle(zscores_df, zscores_filename)
+
+
+def save_pickle(data: pd.DataFrame, filename: Path) -> None:
+    with open(filename, "wb") as out:
+        pickle.dump(data, out, protocol=pickle.HIGHEST_PROTOCOL)
 
 
 def save_cone_pdb(
@@ -343,13 +336,53 @@ def save_cone_pdb(
                     file.writelines(content)
 
 
+def mock_pdb(n: int, resi: int, x: float, y: float, z: float, temp: float) -> str:
+    return pdb_string(
+        "ATOM",  # atom
+        n,
+        "CA",  # name
+        "",  # alt_loc
+        "UNK",  # res_name
+        "A",  # chain
+        resi,
+        "",  # ins
+        x,
+        y,
+        z,
+        1.00,  # occ
+        temp,
+    )
+
+
+def pdb_string(
+    atom: str,
+    serial: int,
+    name: str,
+    alt_loc: str,
+    res_name: str,
+    chain: str,
+    resi: int,
+    ins: str,
+    x: float,
+    y: float,
+    z: float,
+    occ: float,
+    temp: float,
+) -> str:
+    # https://cupnet.net/pdb-format/
+    return (
+        f"{atom:6s}{serial:5d} {name:^4s}{alt_loc:1s}{res_name:3s} {chain:1s}{resi:4d}{ins:1s}   "
+        f"{x:8.3f}{y:8.3f}{z:8.3f}{occ:6.2f}{temp:6.2f}\n"
+    )
+
+
 def get_pdb_filepaths(
     atom: str, chl: dict, out_dir: Path, substituent: str
 ) -> list[Path]:
     filename = f"cone_{chl['chl_id']}_{chl['chl_structure'].name}_{atom}_{substituent}"
     return [
-        out_dir / (filename + ".pdb"),
-        out_dir / (filename + "_zscores.pdb"),
+        out_dir / "pdb_intensity" / (filename + ".pdb"),
+        out_dir / "pdb_zscores" / (filename + ".pdb"),
     ]
 
 
